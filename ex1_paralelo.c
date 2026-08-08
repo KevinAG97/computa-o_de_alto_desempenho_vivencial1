@@ -60,8 +60,14 @@ double agora(void)
 /* ============================================================== */
 void *conta_primos(void *arg)
 {
-    /* SEU CODIGO AQUI */
+    args_t *a = (args_t *) arg;
 
+    long contagem = 0;
+    for (long n = a->inicio; n < a->fim; n++)
+        if (eh_primo(n))
+            contagem++;
+
+    a->parcial = contagem;
     return NULL;
 }
 
@@ -88,7 +94,16 @@ int main(int argc, char **argv)
     /*       e a ultima thread vai ate N (para nao perder o resto).    */
     /* ============================================================== */
 
-    /* SEU CODIGO AQUI */
+    long tam = (N - 2) / T;
+    for (int i = 0; i < T; i++) {
+        args[i].inicio = 2 + i * tam;
+        args[i].fim = (i == T - 1) ? (N + 1) : (2 + (i + 1) * tam);
+        args[i].parcial = 0;
+        if (pthread_create(&threads[i], NULL, conta_primos, &args[i]) != 0) {
+            perror("pthread_create");
+            exit(EXIT_FAILURE);
+        }
+    }
 
     /* ============================================================== */
     /* TODO (c): espere todas as threads (pthread_join) e some os      */
@@ -96,7 +111,10 @@ int main(int argc, char **argv)
     /* ============================================================== */
     long total = 0;
 
-    /* SEU CODIGO AQUI */
+    for (int i = 0; i < T; i++) {
+        pthread_join(threads[i], NULL);
+        total += args[i].parcial;
+    }
 
     double t1 = agora();
 

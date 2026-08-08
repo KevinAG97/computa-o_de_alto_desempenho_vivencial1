@@ -37,8 +37,7 @@
  * mutex que voce vai adicionar! */
 volatile long saldo = 0;
 
-/* TODO (b): declare aqui um mutex global.
- * Dica: pthread_mutex_t trava = PTHREAD_MUTEX_INITIALIZER; */
+pthread_mutex_t trava = PTHREAD_MUTEX_INITIALIZER;
 
 double agora(void)
 {
@@ -57,12 +56,13 @@ void *caixa(void *arg)
 {
     (void) arg; /* nao usamos argumentos neste exercicio */
 
-    for (long i = 0; i < DEPOSITOS_POR_THREAD; i++) {
-        /* TODO (b): proteja esta secao critica com o mutex.        */
-        /* TODO (c): depois, troque por um acumulador local e mova  */
-        /*           o mutex para fora do laco.                     */
-        saldo++;
-    }
+    long local = 0;
+    for (long i = 0; i < DEPOSITOS_POR_THREAD; i++)
+        local++;
+
+    pthread_mutex_lock(&trava);
+    saldo += local;
+    pthread_mutex_unlock(&trava);
 
     return NULL;
 }
