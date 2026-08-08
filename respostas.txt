@@ -2,71 +2,43 @@ Universidade do Vale do Rio dos Sinos - Computação de Alto Desempenho
 Atividade Prática - Programação com Threads em C (pthreads)
 Respostas
 
+Nomes: Kevin de Azevedo Garcia; Arthur Zani Lemos.
+
 Máquina usada nas medições:
-  Processador: AMD EPYC 7763 64-Core Processor (informado por /proc/cpuinfo)
-  Núcleos disponíveis ao processo (nproc): 4
+  Processador: AMD EPYC 7763 64-Core Processor (/proc/cpuinfo)
+  Núcleos disponíveis (nproc): 4
 
 ================================================================
 Parte 0: Aquecimento (ex0_hello.c)
 ================================================================
 
-Q1. Execute o programa várias vezes. A ordem das mensagens "Olá da
-thread..." muda? Por quê?
+Q1. A ordem muda? Por quê?
+Sim, pode mudar entre execuções. pthread_create só dispara a thread;
+quem decide a ordem real de execução é o escalonador do SO, que varia
+com troca de contexto, cache e carga da máquina. Sem sincronização
+explícita, não há garantia de ordem entre threads.
 
-Sim, a ordem pode mudar entre execuções (em algumas rodadas a ordem
-0,1,2,3 se manteve; em outras, uma thread "atrasou" e sua mensagem
-apareceu misturada com as linhas de "main: thread X terminou").
-Isso acontece porque pthread_create apenas dispara a thread; a partir
-daí, quem decide quando cada thread roda de fato é o escalonador do
-sistema operacional. As quatro threads são criadas quase ao mesmo
-tempo e competem por CPU, então pequenas variações de tempo (troca de
-contexto, cache, carga do sistema) mudam a ordem em que cada uma
-chega ao printf. Não há nenhuma garantia de ordem entre threads que
-não estão sincronizadas explicitamente.
+Q2. Comentando o join.
+Observamos saídas incompletas (faltando "Olá da thread...") e até um
+"id" corrompido em uma execução. Sem o join, o main não espera as
+threads: ao retornar, o processo inteiro termina e derruba qualquer
+thread ainda em execução, mesmo no meio de um printf. O join é o que
+sincroniza o fim do programa com o fim de cada thread.
 
-Q2. Comente o laço de pthread_join e execute novamente. O que pode
-acontecer com a saída? (Desfaça a mudança depois.)
-
-Testamos comentando o laço de join. O resultado observado foi
-inconsistente entre execuções: em algumas rodadas faltaram mensagens
-de "Olá da thread..." (por exemplo, apareceram só 1 ou 2 das 4
-mensagens antes de "main: todas as threads terminaram."); em outras
-apareceram até valores de "id" corrompidos/absurdos (como
-"thread 1617703144"), sinal de uso de memória em estado inconsistente
-durante o encerramento abrupto do processo.
-Isso acontece porque, sem o join, o main não espera as threads
-terminarem: assim que a última instrução do main executa, a função
-main retorna e o processo inteiro é finalizado, derrubando
-imediatamente qualquer thread que ainda estivesse em execução (mesmo
-no meio de um printf). O join tem justamente o papel de sincronizar o
-fim do programa com o fim de cada thread, além de liberar os recursos
-da thread.
-
-Q3. Por que os argumentos de cada thread ficam em posições diferentes
-do vetor args, em vez de uma única variável reutilizada no laço?
-
-Porque pthread_create não copia o argumento: ele apenas guarda o
-ponteiro (&args[i]) e a thread só vai efetivamente ler esse endereço
-quando for escalonada, o que pode ocorrer bem depois da chamada de
-pthread_create. Se todas as threads recebessem o endereço da mesma
-variável (ou &i do laço), o valor apontado continuaria mudando a cada
-iteração do laço no main, e quando a thread finalmente lesse o
-conteúdo, poderia já estar vendo o valor de uma iteração seguinte (ou
-até um valor após o laço terminar) — uma condição de corrida sobre a
-própria variável de argumento. Usar um vetor args[T], com uma posição
-exclusiva por thread, garante que cada thread sempre leia o valor que
-foi escrito especificamente para ela, sem interferência das demais.
+Q3. Por que uma struct por thread (args[i]) e não uma variável só?
+Porque pthread_create guarda apenas o ponteiro, e a thread só lê esse
+endereço quando for escalonada — possivelmente bem depois da chamada.
+Com uma única variável (ou &i do laço), o valor apontado já teria
+mudado quando a thread finalmente o lesse: uma condição de corrida
+sobre o próprio argumento. Um vetor args[T] dá a cada thread uma
+posição exclusiva, sem interferência.
 
 ================================================================
 Parte 1: Paralelização e speedup (ex1_paralelo.c)
 ================================================================
 
-Corretude verificada:
-  N = 5.000.000  -> 348.513 primos  (obtido, com 4 threads)
-  N = 20.000.000 -> 1.270.607 primos (obtido, com 1 thread)
-O resultado se manteve correto e idêntico independentemente do número
-de threads usado, como esperado (não há dado compartilhado entre elas
-nesta versão).
+Corretude: N=5.000.000 -> 348.513 primos; N=20.000.000 -> 1.270.607
+primos. Resultado idêntico com 1, 2 e 4 threads.
 
 Tabela de speedup (N = 20.000.000):
 
@@ -75,149 +47,75 @@ Threads   Tempo (s)   Speedup = T1 / Tn
    2        3,219           1,60
    4        2,711           1,90
 
-Q4. O speedup com 2 e 4 threads ficou próximo do ideal (2x, 4x)? Se
-ficou abaixo, proponha uma explicação.
+Q4. Speedup ficou perto do ideal?
+Não (1,60x com 2 threads, 1,90x com 4, bem abaixo de 2x/4x). Causa:
+desbalanceamento de carga. O particionamento é em blocos iguais em
+quantidade, mas testar primalidade de números grandes custa mais caro
+(laço até sqrt(n)). A última thread recebe os números maiores e fica
+trabalhando muito depois das outras, que ficam ociosas esperando o
+join. Alternativas: distribuição cíclica (thread i pega i, i+T,
+i+2T, ...) ou uma fila de tarefas pequenas consumida dinamicamente.
 
-Não. Com 2 threads o speedup foi 1,60x (não 2x) e com 4 threads foi
-1,90x (não 4x) — bem abaixo do ideal, e a eficiência caiu bastante
-(95% com 2 threads, mas apenas ~48% com 4 threads).
-A explicação é o desbalanceamento de carga descrito na dica: o
-particionamento usado é em blocos contíguos de tamanho igual (mesma
-quantidade de números por thread), mas o custo de testar a
-primalidade de eh_primo cresce com o valor de n (o laço percorre até
-sqrt(n) divisores). Como o intervalo [2, N] é dividido em blocos
-crescentes, a última thread recebe os números maiores e mais caros de
-testar, enquanto a primeira thread recebe os números menores e mais
-baratos. Assim, a thread do último bloco ainda está trabalhando muito
-depois que as primeiras já terminaram e ficam ociosas esperando o
-join — o tempo total fica limitado pela thread mais lenta, não pela
-média.
-Para balancear melhor, poderíamos usar distribuição cíclica (a thread
-i processa os números i, i+T, i+2T, ...), que mistura números
-pequenos e grandes em cada thread, ou dividir o trabalho em muitos
-pedaços pequenos consumidos dinamicamente por uma fila de tarefas, de
-forma que threads que terminam cedo peguem mais trabalho.
-
-Q5. Descubra quantos núcleos sua máquina tem (nproc) e compare com os
-speedups medidos. O que você esperaria que acontecesse com o speedup
-se criássemos mais threads do que núcleos? Por quê?
-
-nproc = 4 nesta máquina/ambiente. Os speedups medidos (1,60x com 2
-threads e 1,90x com 4 threads) já ficam abaixo do número de threads
-mesmo dentro do limite de núcleos disponíveis, por causa do
-desbalanceamento explicado na Q4.
-Se criássemos mais threads do que núcleos (por exemplo, 8 ou 16
-threads em uma máquina de 4 núcleos), o speedup não continuaria
-subindo e tenderia a estagnar ou até piorar: como o programa é
-limitado por CPU (CPU-bound), só existem 4 núcleos físicos para
-executar trabalho de verdade a qualquer instante. As threads extras
-não rodam "mais paralelo", apenas passam a se revezar nos mesmos
-núcleos (troca de contexto), e esse revezamento tem custo (salvar e
-restaurar registradores, perda de cache), que só adiciona overhead
-sem adicionar capacidade de processamento real.
+Q5. nproc x speedup.
+nproc = 4. Mesmo dentro do limite de núcleos o speedup já fica abaixo
+do ideal (desbalanceamento). Criar mais threads que núcleos não
+ajudaria mais: em uma carga CPU-bound só existem 4 núcleos para
+processar de verdade a cada instante, então threads extras passam a
+se revezar (troca de contexto), o que só adiciona overhead sem
+adicionar capacidade real de processamento.
 
 ================================================================
 Parte 2: Condição de corrida e mutex (ex2_corrida.c)
 ================================================================
 
-(a) Programa original (sem proteção), 4 threads, 3 execuções:
-  Execução 1: saldo obtido = 5.533.718 (esperado 20.000.000) - ERRADO
-  Execução 2: saldo obtido = 5.521.233 (esperado 20.000.000) - ERRADO
-  Execução 3: saldo obtido = 6.045.148 (esperado 20.000.000) - ERRADO
+(a) Sem proteção, 4 threads, 3 execuções:
+  5.533.718 / 5.521.233 / 6.045.148 (esperado 20.000.000) - ERRADO
   Tempo: ~0,20-0,24 s
 
-O saldo final está incorreto e é diferente em cada execução (nas
-nossas medições, o programa "perdeu" entre 70% e 73% dos depósitos).
-Isso acontece porque saldo++ não é uma instrução atômica: o processador
-a executa em três passos separados (1) ler saldo da memória para um
-registrador, (2) somar 1 no registrador, (3) escrever o registrador de
-volta na memória. Com 4 threads escrevendo ao mesmo tempo na mesma
-variável, os passos de threads diferentes podem se intercalar: duas
-(ou mais) threads podem ler o mesmo valor de saldo antes que qualquer
-uma delas escreva o resultado de volta, então quando escrevem, uma
-sobrescreve a outra e um ou mais incrementos são perdidos. Como a
-intercalação exata depende do escalonamento (que muda a cada
-execução), o resultado final também muda a cada execução — é uma
-condição de corrida clássica sobre a seção crítica saldo++.
+Saldo errado e diferente a cada execução (perdemos ~70% dos
+depósitos). Causa: saldo++ não é atômico — o processador faz ler,
+somar e escrever em três passos separados. Com 4 threads intercalando
+esses passos, duas podem ler o mesmo valor antes de qualquer uma
+escrever, e um incremento se perde. Como a intercalação depende do
+escalonamento, o resultado varia a cada execução.
 
-(b) Corrigido com mutex protegendo cada saldo++:
-  Resultado: saldo obtido = 20.000.000 (correto), em todas as execuções
+(b) Com mutex protegendo cada saldo++:
+  Resultado correto (20.000.000) em todas as execuções.
   Tempo: ~0,62-0,67 s
 
-Com o mutex envolvendo o lock/unlock em cada saldo++, apenas uma
-thread por vez consegue executar os três passos (ler/somar/escrever),
-então nenhum incremento se perde e o resultado fica sempre correto e
-igual a 20.000.000.
-Comparado com a versão (a), o tempo mais que triplicou (de ~0,2 s
-para ~0,65 s). O motivo é o custo de sincronização: o mutex é
-disputado 20.000.000 de vezes (5.000.000 por thread), e cada
-lock/unlock tem um custo não trivial (mesmo sem contenção real,
-envolve operações atômicas/chamadas ao sistema em caso de disputa).
-Com 4 threads competindo pela mesma trava a cada iteração, a maior
-parte do tempo passa a ser gasta esperando a trava em vez de fazendo
-trabalho útil — a seção crítica virou, na prática, um gargalo
-serializado.
+Correto, pois só uma thread por vez executa os três passos. Porém o
+tempo mais que triplicou frente a (a): o mutex é disputado 20 milhões
+de vezes, e essa disputa constante vira o novo gargalo do programa.
 
-(c) Reescrito com acumulador local por thread + uma única seção
-crítica ao final:
-  Resultado: saldo obtido = 20.000.000 (correto), em todas as execuções
-  Tempo: ~0,000 s (abaixo da resolução do cronômetro nesta medição)
+(c) Acumulador local + uma única seção crítica ao final:
+  Resultado correto (20.000.000) em todas as execuções.
+  Tempo: ~0,000 s
 
-O resultado continua correto, pois cada thread soma R$1 em uma
-variável 'local' que só ela acessa (sem qualquer disputa), e só no
-final trava o mutex uma única vez para somar seu parcial ao saldo
-global — exatamente como no padrão "acumular localmente e consolidar
-uma única vez" descrito no material de apoio.
-O tempo medido caiu de forma dramática (~0,65 s para ~0,000 s).
-Observação sobre esta medição específica: como o laço "local++" não
-tem nenhum efeito observável fora da variável local, o compilador
-(gcc -O2) consegue provar matematicamente qual será o valor final do
-laço e o substitui direto por uma soma constante (confirmamos isso
-inspecionando o código de máquina gerado, que não contém mais laço
-algum dentro de caixa()). Ou seja, nesta versão específica o tempo
-medido reflete basicamente só o custo de criar/esperar as 4 threads,
-porque tanto o trabalho da "conta" quanto a sincronização deixaram de
-pesar. Isso não invalida a lição do exercício — pelo contrário, deixa
-ainda mais evidente que, nas versões (a)/(b), o gargalo real era a
-disputa pelo mutex a cada iteração (e não o incremento em si). Em uma
-carga de trabalho onde o corpo do laço faz algo que o compilador não
-possa eliminar (como no Exercício 1), o ganho da versão (c) ainda
-seria muito grande, só que não chegaria a zero.
+Continua correto (cada thread só mexe na própria variável local; o
+mutex trava uma única vez no final para consolidar). O tempo caiu de
+~0,65 s para ~0,000 s. Nesta medição específica o compilador (-O2)
+conseguiu eliminar totalmente o laço "local++" por constant folding
+(confirmado no assembly), então o tempo restante é só overhead de
+criar/esperar as threads. Isso não invalida a lição: só deixa ainda
+mais claro que o gargalo real em (a)/(b) era a disputa pelo mutex, não
+o incremento em si. Com um corpo de laço que o compilador não pudesse
+eliminar (como no Exercício 1), o ganho seria igualmente grande, só
+que sem chegar a zero.
 
-Q6. Com base nos tempos medidos, enuncie uma "regra prática" sobre
-granularidade de sincronização: quando vale a pena proteger cada
-operação individual e quando vale a pena acumular localmente?
+Q6. Regra prática de granularidade.
+Só trave o mutex quando o dado precisa ficar visível para outras
+threads naquele instante. Se uma sequência de operações pode ser
+feita inteiramente em variável local, acumule localmente e consolide
+com uma única seção crítica no final. Proteger cada operação
+individual só se justifica quando as threads realmente precisam ver o
+valor atualizado a cada passo. Regra: quanto maior a frequência de
+lock/unlock em relação ao trabalho útil, maior o overhead relativo —
+a solução é aumentar a granularidade da seção crítica.
 
-Regra prática: só trave o mutex quando o dado realmente precisa ser
-visível/compartilhado entre threads naquele instante. Se uma
-sequência de operações sobre um dado pode ser feita inteiramente em
-uma variável local (privada da thread), sem que nenhuma outra thread
-precise ver os resultados intermediários, é sempre melhor acumular
-localmente e fazer uma única seção crítica no final para consolidar o
-resultado no dado compartilhado. Proteger cada operação individual
-(lock/unlock a cada iteração) só se justifica quando as threads
-precisam necessariamente enxergar o valor atualizado a cada passo
-(por exemplo, threads que dependem do valor mais recente para decidir
-o que fazer em seguida) — e mesmo assim vale considerar se a
-frequência de acesso ao dado compartilhado pode ser reduzida. Em
-resumo: quanto maior a frequência de lock/unlock em relação ao
-trabalho útil de cada seção crítica, maior o overhead relativo de
-sincronização; a solução é aumentar a "granularidade" da seção
-crítica (fazer mais trabalho local por lock).
-
-Q7. No Exercício 1 nós já usávamos, sem dizer, a estratégia da versão
-(c). Identifique onde.
-
-No ex1_paralelo.c, cada thread executa a função conta_primos e
-acumula suas próprias descobertas na variável local 'contagem'
-(dentro da função, incrementada a cada primo encontrado em seu
-intervalo) — não há nenhum mutex nem escrita concorrente em um total
-compartilhado durante o laço de contagem. Só ao final, cada thread
-grava seu resultado parcial em a->parcial (posição exclusiva dela na
-struct args[i], sem disputa com as demais). A "consolidação" final,
-equivalente ao "saldo += local" da versão (c), é feita pelo main,
-depois de todos os joins, no laço que soma total += args[i].parcial.
-Ou seja, o padrão "acumular localmente e consolidar uma única vez" já
-estava em uso desde o Exercício 1 — só que ali a consolidação nem
-precisou de mutex, porque o main faz essa soma sozinho, depois que
-todas as threads já terminaram (sem concorrência nenhuma nesse ponto).
+Q7. Onde o Exercício 1 já usava a estratégia (c)?
+Em conta_primos: cada thread acumula os primos encontrados na
+variável local 'contagem' (sem mutex, sem dado compartilhado) e só ao
+final grava o parcial em a->parcial, posição exclusiva sua. A
+consolidação (equivalente a "saldo += local") é feita pelo main, no
+laço "total += args[i].parcial" após os joins — sem precisar de mutex,
+pois nesse ponto todas as threads já terminaram.
